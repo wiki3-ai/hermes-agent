@@ -1,0 +1,37 @@
+{
+  "name": "Hermes Agent Dev",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+  "workspaceFolder": "/workspace",
+  "mounts": [
+    "source=${localEnv:HOME}/.hermes,target=/opt/data,type=bind"
+  ],
+  "containerEnv": {
+    "HERMES_HOME": "/opt/data",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "runArgs": [
+    "--add-host=host.docker.internal:host-gateway",
+    "--shm-size=1g"
+  ],
+  "postCreateCommand": "uv pip install --system --break-system-packages -e '.[all]'",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.debugpy",
+        "github.copilot",
+        "github.copilot-chat",
+        "ms-python.pylint",
+        "charliermarsh.ruff"
+      ],
+      "settings": {
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": ["tests/", "-q"],
+        "python.defaultInterpreterPath": "/usr/bin/python3"
+      }
+    }
+  }
+}
