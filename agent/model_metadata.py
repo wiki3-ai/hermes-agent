@@ -163,7 +163,7 @@ _MAX_COMPLETION_KEYS = (
 )
 
 # Local server hostnames / address patterns
-_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal")
 
 
 def _normalize_base_url(base_url: str) -> str:

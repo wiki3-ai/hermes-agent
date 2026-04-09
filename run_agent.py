@@ -4379,13 +4379,32 @@ class AIAgent:
             import httpx as _httpx
             _base_timeout = float(os.getenv("HERMES_API_TIMEOUT", 1800.0))
             _stream_read_timeout = float(os.getenv("HERMES_STREAM_READ_TIMEOUT", 60.0))
+
+            # Local providers (LM Studio, Ollama, llama.cpp) can take minutes
+            # for prompt processing (prefill) before sending any SSE data.
+            # The default 60s read timeout causes httpx.ReadTimeout, which
+            # disconnects the client and restarts the whole prompt processing
+            # from scratch — an infinite loop.  Use the base timeout (30 min)
+            # as the read timeout unless the user explicitly overrode it.
+            _is_local = self.base_url and is_local_endpoint(self.base_url)
+            _user_set_read_timeout = os.getenv("HERMES_STREAM_READ_TIMEOUT") is not None
+            if _is_local and not _user_set_read_timeout:
+                _effective_read_timeout = _base_timeout
+                logger.debug(
+                    "Local provider detected (%s) — stream read timeout raised to %.0fs "
+                    "for prompt processing",
+                    self.base_url, _effective_read_timeout,
+                )
+            else:
+                _effective_read_timeout = _stream_read_timeout
+
             stream_kwargs = {
                 **api_kwargs,
                 "stream": True,
                 "stream_options": {"include_usage": True},
                 "timeout": _httpx.Timeout(
                     connect=30.0,
-                    read=_stream_read_timeout,
+                    read=_effective_read_timeout,
                     write=_base_timeout,
                     pool=30.0,
                 ),
@@ -4774,8 +4793,24 @@ class AIAgent:
 
         t = threading.Thread(target=_call, daemon=True)
         t.start()
+        _local_prefill_notified_at = 0.0  # last time we showed a "waiting" message
+        _is_local_provider = bool(self.base_url and is_local_endpoint(self.base_url))
         while t.is_alive():
             t.join(timeout=0.3)
+
+            # For local providers, emit periodic status during prompt processing
+            # so the user knows the model is still working (not hung).
+            if _is_local_provider and not first_delta_fired["done"]:
+                _wait_elapsed = time.time() - last_chunk_time["t"]
+                if _wait_elapsed > 15.0 and (time.time() - _local_prefill_notified_at) > 30.0:
+                    _local_prefill_notified_at = time.time()
+                    self._touch_activity(
+                        f"waiting for local model prompt processing ({int(_wait_elapsed)}s)"
+                    )
+                    self._emit_status(
+                        f"⏳ Waiting for local model to finish prompt processing "
+                        f"({int(_wait_elapsed)}s elapsed)…"
+                    )
 
             # Detect stale streams: connections kept alive by SSE pings
             # but delivering no real chunks.  Kill the client so the
