@@ -258,6 +258,32 @@ def is_local_endpoint(base_url: str) -> bool:
     return False
 
 
+def probe_local_server_alive(base_url: str) -> bool:
+    """Lightweight liveness check for a local LLM server.
+
+    Sends a GET to the ``/v1/models`` endpoint (universally supported by
+    LM Studio, Ollama, vLLM, llama.cpp).  Returns ``True`` if the server
+    responds within 5 s, indicating it is still alive (presumably busy
+    with prompt processing).
+
+    This is intentionally cheap — a single GET with a short timeout so it
+    can be called periodically from the stale-stream polling loop without
+    noticeable overhead.
+    """
+    import httpx
+
+    normalized = _normalize_base_url(base_url)
+    if not normalized:
+        return False
+    url = normalized if normalized.endswith("/v1") else normalized.rstrip("/")
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            r = client.get(f"{url}/models")
+            return r.status_code < 500
+    except Exception:
+        return False
+
+
 def detect_local_server_type(base_url: str) -> Optional[str]:
     """Detect which local server is running at base_url by probing known endpoints.
 

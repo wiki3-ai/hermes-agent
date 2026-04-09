@@ -86,7 +86,7 @@ from agent.model_metadata import (
     fetch_model_metadata,
     estimate_tokens_rough, estimate_messages_tokens_rough, estimate_request_tokens_rough,
     get_next_probe_tier, parse_context_limit_from_error,
-    save_context_length, is_local_endpoint,
+    save_context_length, is_local_endpoint, probe_local_server_alive,
     query_ollama_num_ctx,
 )
 from agent.context_compressor import ContextCompressor
@@ -4384,17 +4384,13 @@ class AIAgent:
             # for prompt processing (prefill) before sending any SSE data.
             # The default 60s read timeout causes httpx.ReadTimeout, which
             # disconnects the client and restarts the whole prompt processing
-            # from scratch — an infinite loop.  Use the base timeout (30 min)
-            # as the read timeout unless the user explicitly overrode it.
+            # from scratch.  Use a moderate read timeout (120s) for local
+            # providers — the stale-stream polling loop will extend it via
+            # liveness probes as long as the server is still alive.
             _is_local = self.base_url and is_local_endpoint(self.base_url)
             _user_set_read_timeout = os.getenv("HERMES_STREAM_READ_TIMEOUT") is not None
             if _is_local and not _user_set_read_timeout:
-                _effective_read_timeout = _base_timeout
-                logger.debug(
-                    "Local provider detected (%s) — stream read timeout raised to %.0fs "
-                    "for prompt processing",
-                    self.base_url, _effective_read_timeout,
-                )
+                _effective_read_timeout = 120.0
             else:
                 _effective_read_timeout = _stream_read_timeout
 
@@ -4771,51 +4767,59 @@ class AIAgent:
                     self._close_request_openai_client(request_client, reason="stream_request_complete")
 
         _stream_stale_timeout_base = float(os.getenv("HERMES_STREAM_STALE_TIMEOUT", 180.0))
-        # Local providers (Ollama, oMLX, llama-cpp) can take 300+ seconds
-        # for prefill on large contexts.  Disable the stale detector unless
-        # the user explicitly set HERMES_STREAM_STALE_TIMEOUT.
-        if _stream_stale_timeout_base == 180.0 and self.base_url and is_local_endpoint(self.base_url):
-            _stream_stale_timeout = float("inf")
-            logger.debug("Local provider detected (%s) — stale stream timeout disabled", self.base_url)
+        _is_local_provider = bool(self.base_url and is_local_endpoint(self.base_url))
+        _user_set_stale_timeout = os.getenv("HERMES_STREAM_STALE_TIMEOUT") is not None
+        # Scale the stale timeout for large contexts: slow models (like Opus)
+        # can legitimately think for minutes before producing the first token
+        # when the context is large.  Without this, the stale detector kills
+        # healthy connections during the model's thinking phase, producing
+        # spurious RemoteProtocolError ("peer closed connection").
+        _est_tokens = sum(len(str(v)) for v in api_kwargs.get("messages", [])) // 4
+        if _est_tokens > 100_000:
+            _stream_stale_timeout = max(_stream_stale_timeout_base, 300.0)
+        elif _est_tokens > 50_000:
+            _stream_stale_timeout = max(_stream_stale_timeout_base, 240.0)
         else:
-            # Scale the stale timeout for large contexts: slow models (like Opus)
-            # can legitimately think for minutes before producing the first token
-            # when the context is large.  Without this, the stale detector kills
-            # healthy connections during the model's thinking phase, producing
-            # spurious RemoteProtocolError ("peer closed connection").
-            _est_tokens = sum(len(str(v)) for v in api_kwargs.get("messages", [])) // 4
-            if _est_tokens > 100_000:
-                _stream_stale_timeout = max(_stream_stale_timeout_base, 300.0)
-            elif _est_tokens > 50_000:
-                _stream_stale_timeout = max(_stream_stale_timeout_base, 240.0)
-            else:
-                _stream_stale_timeout = _stream_stale_timeout_base
+            _stream_stale_timeout = _stream_stale_timeout_base
+
+        # For local providers, the stale timeout also acts as the liveness
+        # probe interval — see the polling loop below.
+        _local_probe_interval = min(_stream_stale_timeout, 30.0)
+        _last_probe_time = 0.0
 
         t = threading.Thread(target=_call, daemon=True)
         t.start()
-        _local_prefill_notified_at = 0.0  # last time we showed a "waiting" message
-        _is_local_provider = bool(self.base_url and is_local_endpoint(self.base_url))
         while t.is_alive():
             t.join(timeout=0.3)
 
-            # For local providers, emit periodic status during prompt processing
-            # so the user knows the model is still working (not hung).
-            if _is_local_provider and not first_delta_fired["done"]:
-                _wait_elapsed = time.time() - last_chunk_time["t"]
-                if _wait_elapsed > 15.0 and (time.time() - _local_prefill_notified_at) > 30.0:
-                    _local_prefill_notified_at = time.time()
-                    self._touch_activity(
-                        f"waiting for local model prompt processing ({int(_wait_elapsed)}s)"
+            _stale_elapsed = time.time() - last_chunk_time["t"]
+
+            # Local providers (LM Studio, Ollama, llama.cpp) can take minutes
+            # for prompt processing (prefill) before sending any SSE data.
+            # Instead of disabling the stale detector entirely, we probe the
+            # server for liveness: if it still responds to /v1/models, it is
+            # alive and presumably doing prefill — reset the stale timer.
+            # If the server is unreachable, the normal stale timeout fires.
+            if (
+                _is_local_provider
+                and not _user_set_stale_timeout
+                and not first_delta_fired["done"]
+                and _stale_elapsed > _local_probe_interval
+                and (time.time() - _last_probe_time) > _local_probe_interval
+            ):
+                _last_probe_time = time.time()
+                if probe_local_server_alive(self.base_url):
+                    logger.debug(
+                        "Local server alive (prefill in progress, %ds elapsed) "
+                        "— resetting stale timer",
+                        int(_stale_elapsed),
                     )
-                    self._emit_status(
-                        f"⏳ Waiting for local model to finish prompt processing "
-                        f"({int(_wait_elapsed)}s elapsed)…"
-                    )
+                    last_chunk_time["t"] = time.time()
+                    _stale_elapsed = 0.0
 
             # Detect stale streams: connections kept alive by SSE pings
             # but delivering no real chunks.  Kill the client so the
             # inner retry loop can start a fresh connection.
-            _stale_elapsed = time.time() - last_chunk_time["t"]
             if _stale_elapsed > _stream_stale_timeout:
                 _est_ctx = sum(len(str(v)) for v in api_kwargs.get("messages", [])) // 4
                 logger.warning(
