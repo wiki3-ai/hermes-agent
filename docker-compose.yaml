@@ -1,0 +1,37 @@
+services:
+  hermes:
+    build: .
+    container_name: hermes
+    restart: unless-stopped
+    command: gateway run
+    volumes:
+      - ~/.hermes:/opt/data
+    # Allow the container to reach Ollama and LM Studio on the host Mac.
+    # host.docker.internal resolves to the Docker Desktop host IP on macOS.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    shm_size: "1g"
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2.0"
+
+  # Interactive CLI session — run with: docker compose run --rm hermes-cli
+  hermes-cli:
+    build: .
+    container_name: hermes-cli
+    stdin_open: true
+    tty: true
+    volumes:
+      - ~/.hermes:/opt/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    shm_size: "1g"
+    profiles:
+      - cli
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2.0"
