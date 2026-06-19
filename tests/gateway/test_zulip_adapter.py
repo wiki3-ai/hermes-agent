@@ -529,10 +529,10 @@ class TestMessageHandling:
 class TestRegister:
 
     def test_register_calls_register_platform(self):
-        mock_registry = MagicMock()
-        register(mock_registry)
-        mock_registry.register_platform.assert_called_once()
-        call_kwargs = mock_registry.register_platform.call_args
+        mock_ctx = MagicMock()
+        register(mock_ctx)
+        mock_ctx.register_platform.assert_called_once()
+        call_kwargs = mock_ctx.register_platform.call_args
         assert call_kwargs[1]["name"] == "zulip"
-        assert call_kwargs[1]["token_env_var"] == "ZULIP_API_KEY"
+        assert call_kwargs[1]["label"] == "Zulip"
         assert call_kwargs[1]["max_message_length"] == 10000

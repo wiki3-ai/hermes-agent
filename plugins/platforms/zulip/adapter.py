@@ -676,20 +676,42 @@ async def _standalone_send(
     return {"error": result.get("msg", "send failed")}
 
 
-def register(registry) -> None:
-    """Register the Zulip platform adapter with the gateway."""
-    registry.register_platform(
+def _build_adapter(config) -> ZulipAdapter:
+    """Factory wrapper that constructs ZulipAdapter from a PlatformConfig."""
+    return ZulipAdapter(config)
+
+
+def register(ctx) -> None:
+    """Plugin entry point — called by the Hermes plugin system."""
+    ctx.register_platform(
         name="zulip",
-        adapter_factory=ZulipAdapter,
-        check_requirements=check_requirements,
-        is_connected=is_connected,
+        label="Zulip",
+        adapter_factory=_build_adapter,
+        check_fn=check_requirements,
         validate_config=validate_config,
-        _env_enablement=_env_enablement,
-        token_env_var="ZULIP_API_KEY",
-        max_message_length=MAX_MESSAGE_LENGTH,
-        standalone_sender_fn=_standalone_send,
+        is_connected=is_connected,
+        required_env=["ZULIP_EMAIL", "ZULIP_API_KEY", "ZULIP_SITE"],
+        install_hint="pip install zulip",
+        # Env-driven auto-configuration: seeds PlatformConfig.extra with
+        # email/api_key/site + home_channel so env-only setups show up
+        # in gateway status without instantiating the adapter.
+        env_enablement_fn=_env_enablement,
+        # Auth env vars for _is_user_authorized() integration.
         allowed_users_env="ZULIP_ALLOWED_USERS",
         allow_all_env="ZULIP_ALLOW_ALL_USERS",
+        # Cron home-channel delivery.
         cron_deliver_env_var="ZULIP_HOME_CHANNEL",
+        # Out-of-process cron delivery via Zulip REST API.
+        standalone_sender_fn=_standalone_send,
+        # Display
         emoji="💬",
+        max_message_length=MAX_MESSAGE_LENGTH,
+        # LLM guidance
+        platform_hint=(
+            "You are chatting via Zulip. Zulip supports standard Markdown "
+            "with some differences. Messages support streams (channels) with "
+            "topics for organization. Keep responses concise. Use topic names "
+            "to organize conversations. Code blocks with triple backticks "
+            "are supported. Links render automatically."
+        ),
     )
