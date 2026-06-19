@@ -1,0 +1,44 @@
+name: zulip-platform
+label: Zulip
+kind: platform
+version: 1.0.0
+description: >
+  Zulip gateway adapter for Hermes Agent.
+  Connects to a Zulip organization and relays messages between Zulip
+  streams/topics/DMs and the Hermes agent.  Supports topic-based
+  message organization, file uploads, and home-stream cron delivery.
+author: Nous Research
+requires_env:
+  - name: ZULIP_EMAIL
+    description: "Zulip bot email address (e.g. hermes-bot@chat.wiki3.ai)"
+    prompt: "Zulip bot email"
+    password: false
+  - name: ZULIP_API_KEY
+    description: "Zulip bot API key"
+    prompt: "Zulip API key"
+    password: true
+  - name: ZULIP_SITE
+    description: "Zulip server URL (e.g. https://chat.wiki3.ai)"
+    prompt: "Zulip server URL"
+    password: false
+optional_env:
+  - name: ZULIP_ALLOWED_USERS
+    description: "Comma-separated Zulip user emails allowed to talk to the bot"
+    prompt: "Allowed users (comma-separated emails)"
+    password: false
+  - name: ZULIP_ALLOW_ALL_USERS
+    description: "Allow any Zulip user to talk to the bot (dev only)"
+    prompt: "Allow all users? (true/false)"
+    password: false
+  - name: ZULIP_HOME_CHANNEL
+    description: "Stream name or stream:ID for cron / notification delivery"
+    prompt: "Home stream name or ID"
+    password: false
+  - name: ZULIP_HOME_CHANNEL_NAME
+    description: "Stream name for display (e.g. general)"
+    prompt: "Home stream name"
+    password: false
+  - name: ZULIP_HOME_TOPIC
+    description: "Default topic within the home stream (default: hermes)"
+    prompt: "Home topic"
+    password: false
